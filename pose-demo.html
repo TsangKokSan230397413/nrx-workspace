@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NRX 動作偵測原型（AI Pose Detection Prototype）v4</title>
+<style>
+  :root {
+    --bg: #14181f; --panel: #1d2330; --panel-2: #242b3a;
+    --text: #eef1f6; --muted: #93a0b4; --accent: #4fd1c5;
+    --good: #4ade80; --bad: #f87171; --warn: #fbbf24;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 20px; max-width: 1120px; margin: 0 auto; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  .facing-hint {
+    background: var(--panel-2); border-left: 4px solid var(--accent);
+    padding: 10px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 10px; line-height: 1.5;
+  }
+  .video-wrap { position: relative; background: #000; border-radius: var(--radius); overflow: hidden; aspect-ratio: 4/3; }
+  video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+  video { object-fit: cover; }
+  .feedback-banner {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 16px; font-size: 20px;
+    font-weight: 700; text-align: center; background: rgba(0,0,0,0.55); transition: background-color .2s;
+  }
+  .panel { background: var(--panel); border-radius: var(--radius); padding: 18px; }
+  .panel + .panel { margin-top: 16px; }
+  label { font-size: 13px; color: var(--muted); display:block; margin-bottom:6px;}
+  select, button, input[type="number"] {
+    width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #333c4d;
+    background: var(--panel-2); color: var(--text); font-size: 15px; margin-bottom: 12px; cursor: pointer;
+  }
+  input[type="number"] { cursor: text; }
+  button.primary { background: var(--accent); color:#08201d; font-weight:700; border:none; }
+  button.secondary { background: transparent; border:1px solid #333c4d; }
+  .voice-row { display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom: 12px; font-size: 14px; }
+  .voice-row input { width: auto; margin: 0; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 6px; }
+  .stat { background: var(--panel-2); border-radius: 10px; padding: 12px; text-align: center; }
+  .stat .num { font-size: 26px; font-weight: 800; }
+  .stat .lbl { font-size: 12px; color: var(--muted); margin-top: 2px;}
+  .history { max-height: 220px; overflow-y: auto; font-size: 13px; }
+  .history-row { display:flex; justify-content:space-between; padding: 6px 8px; border-radius: 8px; margin-bottom: 4px; }
+  .history-row.ok { background: rgba(74,222,128,0.12); color: var(--good); }
+  .history-row.no { background: rgba(248,113,113,0.12); color: var(--bad); }
+  .badge { display:inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); color: var(--muted); margin-left:6px; }
+  .exercise-tag { font-size:11px; color:var(--muted); }
+  .plan-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .plan-grid > div { margin-bottom: 4px; }
+  #planProgress { font-size: 14px; color: var(--muted); margin-top: 4px; }
+  #asymmetryRow { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  .safety-overlay {
+    display: none; position: fixed; inset: 0; z-index: 9999;
+    background: rgba(190, 30, 30, 0.95);
+    align-items: center; justify-content: center; flex-direction: column;
+    text-align: center; padding: 24px;
+    animation: pulseBg 1.2s infinite;
+  }
+  @keyframes pulseBg {
+    0%, 100% { background: rgba(190, 30, 30, 0.95); }
+    50% { background: rgba(230, 50, 50, 0.95); }
+  }
+  .safety-box { max-width: 460px; }
+  .safety-icon { font-size: 64px; margin-bottom: 10px; }
+  .safety-message { font-size: 22px; font-weight: 800; color: #fff; margin-bottom: 24px; line-height: 1.5; }
+  .safety-box button {
+    background: #fff; color: #b91c1c; font-weight: 800; font-size: 18px;
+    padding: 14px 20px; border: none; border-radius: 12px; cursor: pointer;
+  }
+
+  .rest-overlay {
+    display: none; position: fixed; inset: 0; z-index: 9000;
+    background: rgba(20, 60, 58, 0.94);
+    align-items: center; justify-content: center; flex-direction: column;
+    text-align: center; padding: 24px;
+  }
+  .rest-box { max-width: 460px; }
+  .rest-icon { font-size: 56px; margin-bottom: 10px; }
+  .rest-message { font-size: 22px; font-weight: 800; color: #fff; margin-bottom: 8px; }
+  .rest-countdown { font-size: 36px; font-weight: 900; color: var(--accent); margin-bottom: 22px; }
+  .rest-box button {
+    background: var(--accent); color:#08201d; font-weight:800; font-size: 16px;
+    padding: 12px 18px; border: none; border-radius: 12px; cursor: pointer;
+  }
+  .back-link {
+    display: inline-block; margin-bottom: 14px; color: var(--accent);
+    text-decoration: none; font-size: 14px; font-weight: 700;
+  }
+  .cloud-save-btn {
+    background: #2f5bff; color: #fff; font-weight: 700; border: none;
+  }
+  .cloud-status {
+    font-size: 13px; color: var(--muted); margin-top: -6px; margin-bottom: 12px; min-height: 18px;
+  }
+  .cloud-status.success { color: var(--good); }
+  .cloud-status.error { color: var(--bad); }
+</style>
+
+<!-- Firebase：跟主網站（AdvMeds 復健復能處方箋系統）共用同一個資料庫 -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="firebase-init.js"></script>
+</head>
+<body>
+
+<a class="back-link" href="index.html">← 回到 AdvMeds 主系統</a>
+<h1>NRX 動作偵測原型 — AI Pose Detection v4</h1>
+<p class="sub">新增：側平舉、活動度與左右不對稱數據、訓練組數/休息計時、CSV 資料匯出；離開畫面偵測改為 10 秒。</p>
+
+<div class="layout">
+  <div>
+    <div id="facingHint" class="facing-hint"></div>
+    <div class="video-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="feedbackBanner" class="feedback-banner">請按「開始鏡頭」開始</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <label for="exerciseSelect">選擇動作</label>
+      <select id="exerciseSelect">
+        <option value="squat">深蹲</option>
+        <option value="splitSquat">分腿蹲</option>
+        <option value="armRaise">雙手舉高（過肩）</option>
+        <option value="lateralRaise">側平舉（手臂側舉）</option>
+        <option value="pushUp">伏地挺身</option>
+      </select>
+
+      <label class="voice-row"><input type="checkbox" id="voiceToggle" checked /><span>開啟語音提示</span></label>
+
+      <button id="startBtn" class="primary">開始鏡頭</button>
+      <button id="resetBtn" class="secondary">重設「目前這個動作」的紀錄</button>
+      <button id="exportBtn" class="secondary">匯出本次資料（CSV）</button>
+      <button id="cloudSaveBtn" class="cloud-save-btn">☁️ 儲存這次訓練紀錄到雲端</button>
+      <div id="cloudStatus" class="cloud-status"></div>
+    </div>
+
+    <div class="panel">
+      <label>訓練設定（次數與組數，選填）</label>
+      <div class="plan-grid">
+        <div>
+          <label>每組次數</label>
+          <input type="number" id="repsTargetInput" min="1" value="10" />
+        </div>
+        <div>
+          <label>組數</label>
+          <input type="number" id="setsTargetInput" min="1" value="3" />
+        </div>
+        <div>
+          <label>休息秒數</label>
+          <input type="number" id="restSecondsInput" min="5" value="30" />
+        </div>
+      </div>
+      <button id="applyPlanBtn" class="secondary">套用設定，開始這組訓練</button>
+      <div id="planProgress">尚未設定訓練組數（目前為無限次數模式）</div>
+    </div>
+
+    <div class="panel">
+      <label>統計 <span class="exercise-tag" id="statsTag"></span></label>
+      <div class="stat-grid">
+        <div class="stat"><div class="num" id="repCount">0</div><div class="lbl">總次數</div></div>
+        <div class="stat"><div class="num" id="successCount">0</div><div class="lbl">合格次數（≥85%）</div></div>
+        <div class="stat"><div class="num" id="successRate">—</div><div class="lbl">合格率</div></div>
+        <div class="stat"><div class="num" id="avgScore">—</div><div class="lbl">平均完成度</div></div>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><div class="num" id="lastMetric">—</div><div class="lbl" id="lastMetricLbl">本次活動度</div></div>
+        <div class="stat"><div class="num" id="bestMetric">—</div><div class="lbl" id="bestMetricLbl">最佳活動度</div></div>
+      </div>
+      <div id="asymmetryRow"></div>
+    </div>
+
+    <div class="panel">
+      <label>分數趨勢 <span class="badge">最近 20 次</span></label>
+      <svg id="sparkline" viewBox="0 0 300 70" style="width:100%;height:70px;">
+        <line id="sparkThreshold" x1="0" x2="300" y1="0" y2="0" stroke="#4ade80" stroke-dasharray="4 3" stroke-width="1"/>
+        <polyline id="sparkLine" fill="none" stroke="#4fd1c5" stroke-width="2" points=""/>
+      </svg>
+    </div>
+
+    <div class="panel">
+      <label>紀錄 <span class="badge">最新在最上面</span></label>
+      <div id="history" class="history"></div>
+    </div>
+  </div>
+</div>
+
+<div id="safetyOverlay" class="safety-overlay">
+  <div class="safety-box">
+    <div class="safety-icon">⚠️</div>
+    <div id="safetyMessage" class="safety-message"></div>
+    <button id="safetyDismissBtn">我沒事，繼續使用</button>
+  </div>
+</div>
+
+<div id="restOverlay" class="rest-overlay">
+  <div class="rest-box">
+    <div class="rest-icon">💧</div>
+    <div id="restMessage" class="rest-message"></div>
+    <div id="restCountdown" class="rest-countdown"></div>
+    <button id="restSkipBtn">提前開始下一組</button>
+  </div>
+</div>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver, DrawingUtils } from "https://esm.sh/@mediapipe/tasks-vision@0.10.14";
+
+// ============ 可調整參數區 ============
+const SUCCESS_THRESHOLD = 85;
+
+const BOTH_KNEE_BEND_MAX = 150;
+const MIN_HIP_DROP = 0.045;
+
+const PUSHUP_MAX_TILT = 55;
+const PUSHUP_MIN_BODYLINE = 125;
+
+const MIN_REP_MS = 700;
+
+const FALL_DROP_THRESHOLD = 0.22;
+const FALL_WINDOW_MS = 600;
+const DISAPPEAR_TIMEOUT_MS = 10000; // 改為 10 秒
+const SAFETY_COOLDOWN_MS = 8000;
+// =======================================
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("overlay");
+const ctx = canvas.getContext("2d");
+const drawingUtils = new DrawingUtils(ctx);
+const feedbackBanner = document.getElementById("feedbackBanner");
+const facingHintEl = document.getElementById("facingHint");
+const exerciseSelect = document.getElementById("exerciseSelect");
+const startBtn = document.getElementById("startBtn");
+const resetBtn = document.getElementById("resetBtn");
+const exportBtn = document.getElementById("exportBtn");
+const cloudSaveBtn = document.getElementById("cloudSaveBtn");
+const cloudStatusEl = document.getElementById("cloudStatus");
+const voiceToggle = document.getElementById("voiceToggle");
+
+const repCountEl = document.getElementById("repCount");
+const successCountEl = document.getElementById("successCount");
+const successRateEl = document.getElementById("successRate");
+const avgScoreEl = document.getElementById("avgScore");
+const historyEl = document.getElementById("history");
+const statsTagEl = document.getElementById("statsTag");
+
+const safetyOverlay = document.getElementById("safetyOverlay");
+const safetyMessageEl = document.getElementById("safetyMessage");
+const safetyDismissBtn = document.getElementById("safetyDismissBtn");
+
+const restOverlay = document.getElementById("restOverlay");
+const restMessageEl = document.getElementById("restMessage");
+const restCountdownEl = document.getElementById("restCountdown");
+const restSkipBtn = document.getElementById("restSkipBtn");
+
+const repsTargetInput = document.getElementById("repsTargetInput");
+const setsTargetInput = document.getElementById("setsTargetInput");
+const restSecondsInput = document.getElementById("restSecondsInput");
+const applyPlanBtn = document.getElementById("applyPlanBtn");
+const planProgressEl = document.getElementById("planProgress");
+
+let poseLandmarker;
+let webcamRunning = false;
+let lastVideoTime = -1;
+let voiceEnabled = true;
+voiceToggle.addEventListener("change", () => { voiceEnabled = voiceToggle.checked; });
+
+// ---------- 共用小工具 ----------
+function angleBetween(a, b, c) {
+  const ab = { x: a.x - b.x, y: a.y - b.y };
+  const cb = { x: c.x - b.x, y: c.y - b.y };
+  const dot = ab.x * cb.x + ab.y * cb.y;
+  const magAB = Math.hypot(ab.x, ab.y);
+  const magCB = Math.hypot(cb.x, cb.y);
+  if (magAB === 0 || magCB === 0) return 0;
+  const cos = Math.min(1, Math.max(-1, dot / (magAB * magCB)));
+  return (Math.acos(cos) * 180) / Math.PI;
+}
+// 手臂向量（肩→腕）跟「垂直向下」方向的夾角：0=手垂放，90=側平舉，180=手舉過頭
+function angleFromVertical(shoulder, wrist) {
+  const vx = wrist.x - shoulder.x;
+  const vy = wrist.y - shoulder.y;
+  const mag = Math.hypot(vx, vy);
+  if (mag === 0) return 0;
+  const cos = Math.min(1, Math.max(-1, vy / mag));
+  return (Math.acos(cos) * 180) / Math.PI;
+}
+function clampScore(v) { return Math.max(0, Math.min(100, v)); }
+function landmarkVisible(lm, idx) {
+  const p = lm[idx];
+  return p && (p.visibility === undefined || p.visibility > 0.4);
+}
+function scoreFromAngleDiff(actual, target, slope = 1.0, tolerance = 8) {
+  const diff = Math.max(0, Math.abs(actual - target) - tolerance);
+  return clampScore(100 - diff * slope);
+}
+function scoreReachTarget(actual, target, slope = 0.8, tolerance = 5, biggerIsBetter = true) {
+  const reached = biggerIsBetter ? actual <= target : actual >= target;
+  if (reached) return 100;
+  const diff = Math.max(0, (biggerIsBetter ? actual - target : target - actual) - tolerance);
+  return clampScore(100 - diff * slope);
+}
+function pickSide(lm) {
+  const vis = (i) => lm[i].visibility ?? 1;
+  const leftVis = vis(11) + vis(13) + vis(15) + vis(23) + vis(27);
+  const rightVis = vis(12) + vis(14) + vis(16) + vis(24) + vis(28);
+  return rightVis >= leftVis
+    ? { shoulder: 12, elbow: 14, wrist: 16, hip: 24, ankle: 28 }
+    : { shoulder: 11, elbow: 13, wrist: 15, hip: 23, ankle: 27 };
+}
+
+// ---------- 語音 ----------
+function speak(text) {
+  if (!voiceEnabled || !("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = "zh-TW";
+  utter.rate = 0.95;
+  window.speechSynthesis.speak(utter);
+}
+function speakUrgent(text) {
+  if (!("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = "zh-TW";
+  utter.rate = 1.0;
+  window.speechSynthesis.speak(utter);
+}
+function playBeep() {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = 880;
+    gain.gain.value = 0.15;
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    setTimeout(() => { osc.stop(); audioCtx.close(); }, 500);
+  } catch (e) { /* 忽略 */ }
+}
+
+// ---------- 跌倒/不穩 警示 ----------
+let hipHistory = [];
+let personMissingSince = null;
+let safetyAlertActive = false;
+let safetyCooldownUntil = 0;
+
+function triggerSafetyAlert(message) {
+  if (safetyAlertActive) return;
+  if (performance.now() < safetyCooldownUntil) return;
+  safetyAlertActive = true;
+  safetyMessageEl.textContent = message;
+  safetyOverlay.style.display = "flex";
+  playBeep();
+  speakUrgent(message);
+}
+function dismissSafetyAlert() {
+  safetyAlertActive = false;
+  safetyOverlay.style.display = "none";
+  safetyCooldownUntil = performance.now() + SAFETY_COOLDOWN_MS;
+  hipHistory = [];
+  personMissingSince = null;
+}
+safetyDismissBtn.addEventListener("click", dismissSafetyAlert);
+
+// ---------- 訓練組數 / 休息 ----------
+function openRestOverlay(ex) {
+  restMessageEl.textContent = "第 " + ex.plan.currentSet + " 組完成！休息一下";
+  restOverlay.style.display = "flex";
+}
+function closeRestOverlay() { restOverlay.style.display = "none"; }
+function endRest(ex) {
+  ex.plan.resting = false;
+  ex.plan.currentSet += 1;
+  ex.plan.repsInSet = 0;
+  closeRestOverlay();
+  speak("開始第 " + ex.plan.currentSet + " 組");
+  updatePlanUI();
+}
+restSkipBtn.addEventListener("click", () => {
+  const ex = currentExercise();
+  if (ex.plan && ex.plan.resting) endRest(ex);
+});
+setInterval(() => {
+  const ex = currentExercise();
+  if (ex.plan && ex.plan.resting) {
+    const remain = Math.max(0, Math.ceil((ex.plan.restEndTime - performance.now()) / 1000));
+    restCountdownEl.textContent = "休息中：" + remain + " 秒";
+    if (remain <= 0) endRest(ex);
+  }
+}, 400);
+
+applyPlanBtn.addEventListener("click", () => {
+  const ex = currentExercise();
+  const reps = Math.max(1, parseInt(repsTargetInput.value, 10) || 10);
+  const sets = Math.max(1, parseInt(setsTargetInput.value, 10) || 3);
+  const rest = Math.max(5, parseInt(restSecondsInput.value, 10) || 30);
+  ex.plan = { targetReps: reps, targetSets: sets, restSeconds: rest, currentSet: 1, repsInSet: 0, resting: false, restEndTime: null, done: false };
+  closeRestOverlay();
+  setBanner("已設定：共 " + sets + " 組，每組 " + reps + " 下", "neutral");
+  updatePlanUI();
+});
+
+function updatePlanUI() {
+  const ex = currentExercise();
+  if (!ex.plan) { planProgressEl.textContent = "尚未設定訓練組數（目前為無限次數模式）"; return; }
+  if (ex.plan.done) { planProgressEl.textContent = "🎉 已完成 " + ex.plan.targetSets + " 組 x " + ex.plan.targetReps + " 次！"; return; }
+  planProgressEl.textContent = "第 " + ex.plan.currentSet + " / " + ex.plan.targetSets + " 組　（本組 " + ex.plan.repsInSet + " / " + ex.plan.targetReps + " 下）" + (ex.plan.resting ? "　休息中…" : "");
+}
+
+// ---------- 分數趨勢圖 ----------
+function drawSparkline(scores) {
+  const w = 300, h = 70, pad = 6;
+  const thresholdY = h - pad - (SUCCESS_THRESHOLD / 100) * (h - 2 * pad);
+  const thresholdLine = document.getElementById("sparkThreshold");
+  thresholdLine.setAttribute("y1", thresholdY);
+  thresholdLine.setAttribute("y2", thresholdY);
+
+  const last = scores.slice(-20);
+  const lineEl = document.getElementById("sparkLine");
+  if (last.length === 0) { lineEl.setAttribute("points", ""); return; }
+  const stepX = last.length > 1 ? (w - 2 * pad) / (last.length - 1) : 0;
+  const points = last.map((s, i) => {
+    const x = pad + i * stepX;
+    const y = h - pad - (s / 100) * (h - 2 * pad);
+    return x + "," + y;
+  }).join(" ");
+  lineEl.setAttribute("points", points);
+}
+
+// ---------- 動作定義 ----------
+const exercises = {
+  squat: {
+    label: "深蹲",
+    metricLabel: "膝蓋彎曲角度",
+    facingHint: "📍 建議「側面 45°」對鏡頭，讓鏡頭能看到全身（頭到腳），比正面更容易判斷蹲的深度。",
+    requiredPoints: [23, 25, 27, 24, 26, 28],
+    state: { phase: "neutral", best: null, standingHipY: null },
+    stats: { repCount: 0, successCount: 0, scores: [], history: [], bestMetric: null, bestScoreSoFar: null },
+    ENTER_DOWN: 135,
+    EXIT_UP: 158,
+    TARGET_KNEE: 100,
+    process(lm) {
+      const leftKnee = angleBetween(lm[23], lm[25], lm[27]);
+      const rightKnee = angleBetween(lm[24], lm[26], lm[28]);
+      const kneeAngle = (leftKnee + rightKnee) / 2;
+      const leftTorso = angleBetween(lm[11], lm[23], lm[25]);
+      const rightTorso = angleBetween(lm[12], lm[24], lm[26]);
+      const torsoAngle = (leftTorso + rightTorso) / 2;
+      const hipY = (lm[23].y + lm[24].y) / 2;
+
+      if (leftKnee > 160 && rightKnee > 160) this.state.standingHipY = hipY;
+
+      if (this.state.phase === "neutral" && kneeAngle < this.ENTER_DOWN) {
+        this.state.phase = "active";
+        this.state.best = kneeAngle;
+        this.state.bestLeftKnee = leftKnee;
+        this.state.bestRightKnee = rightKnee;
+        this.state.bestHipY = hipY;
+        this.state.startTime = performance.now();
+        speak("開始下蹲，蹲低一點");
+        setBanner("下蹲中…再蹲低一點", "warn");
+      } else if (this.state.phase === "active") {
+        this.state.best = Math.min(this.state.best, kneeAngle);
+        this.state.bestLeftKnee = Math.min(this.state.bestLeftKnee, leftKnee);
+        this.state.bestRightKnee = Math.min(this.state.bestRightKnee, rightKnee);
+        this.state.bestHipY = Math.max(this.state.bestHipY, hipY);
+        if (kneeAngle >= this.EXIT_UP) {
+          const bothKneesBent = this.state.bestLeftKnee < BOTH_KNEE_BEND_MAX && this.state.bestRightKnee < BOTH_KNEE_BEND_MAX;
+          const baseline = this.state.standingHipY ?? hipY;
+          const hipDropOK = (this.state.bestHipY - baseline) > MIN_HIP_DROP;
+          this.state.phase = "neutral";
+          if (!bothKneesBent || !hipDropOK) {
+            setBanner("偵測到非蹲下動作（例如抬腿），未計入次數", "neutral");
+            this.state.best = null;
+            return;
+          }
+          const elapsed = performance.now() - this.state.startTime;
+          const depthScore = scoreReachTarget(this.state.best, this.TARGET_KNEE, 0.8, 5, true);
+          const backScore = clampScore(((torsoAngle - 90) / 60) * 100);
+          const metricValue = 180 - this.state.best;
+          finishRep(this, { score: Math.round(depthScore * 0.75 + backScore * 0.25), elapsedMs: elapsed, metricValue });
+          this.state.best = null;
+        } else {
+          setBanner("下蹲中…膝蓋角度 " + Math.round(kneeAngle) + "°", "warn");
+        }
+      } else {
+        setBanner("請站直，準備開始深蹲", "neutral");
+      }
+    },
+  },
+
+  splitSquat: {
+    label: "分腿蹲",
+    metricLabel: "膝蓋彎曲角度",
+    facingHint: "📍 建議「側面」對鏡頭，前後腳一前一後站好。目前系統以「兩腳膝蓋角度」計分，還沒有區分前後腳，僅供初步參考。",
+    requiredPoints: [23, 25, 27, 24, 26, 28],
+    state: { phase: "neutral", best: null, standingHipY: null },
+    stats: { repCount: 0, successCount: 0, scores: [], history: [], bestMetric: null, bestScoreSoFar: null },
+    ENTER_DOWN: 140,
+    EXIT_UP: 160,
+    TARGET_KNEE: 100,
+    process(lm) {
+      const leftKnee = angleBetween(lm[23], lm[25], lm[27]);
+      const rightKnee = angleBetween(lm[24], lm[26], lm[28]);
+      const workingKnee = Math.min(leftKnee, rightKnee);
+      const hipY = (lm[23].y + lm[24].y) / 2;
+
+      if (leftKnee > 150 && rightKnee > 150) this.state.standingHipY = hipY;
+
+      if (this.state.phase === "neutral" && workingKnee < this.ENTER_DOWN) {
+        this.state.phase = "active";
+        this.state.best = workingKnee;
+        this.state.bestLeftKnee = leftKnee;
+        this.state.bestRightKnee = rightKnee;
+        this.state.bestHipY = hipY;
+        this.state.startTime = performance.now();
+        speak("開始下蹲");
+        setBanner("下蹲中…再蹲低一點", "warn");
+      } else if (this.state.phase === "active") {
+        this.state.best = Math.min(this.state.best, workingKnee);
+        this.state.bestLeftKnee = Math.min(this.state.bestLeftKnee, leftKnee);
+        this.state.bestRightKnee = Math.min(this.state.bestRightKnee, rightKnee);
+        this.state.bestHipY = Math.max(this.state.bestHipY, hipY);
+        if (workingKnee >= this.EXIT_UP) {
+          const bothKneesBent = this.state.bestLeftKnee < BOTH_KNEE_BEND_MAX && this.state.bestRightKnee < BOTH_KNEE_BEND_MAX;
+          this.state.phase = "neutral";
+          if (!bothKneesBent) {
+            setBanner("偵測到非蹲下動作（例如抬腿），未計入次數", "neutral");
+            this.state.best = null;
+            return;
+          }
+          const elapsed = performance.now() - this.state.startTime;
+          const depthScore = scoreReachTarget(this.state.best, this.TARGET_KNEE, 0.8, 5, true);
+          const metricValue = 180 - this.state.best;
+          finishRep(this, { score: Math.round(depthScore), elapsedMs: elapsed, metricValue });
+          this.state.best = null;
+        } else {
+          setBanner("下蹲中…膝蓋角度 " + Math.round(workingKnee) + "°", "warn");
+        }
+      } else {
+        setBanner("前後腳站好，準備開始分腿蹲", "neutral");
+      }
+    },
+  },
+
+  pushUp: {
+    label: "伏地挺身",
+    metricLabel: "手肘彎曲角度",
+    facingHint: "📍 建議「側面」對鏡頭，且鏡頭要放低（接近地面高度），才能拍到整個身體。筆電鏡頭通常太高，建議把筆電放矮桌/地上，或改用手機側放。",
+    requiredPoints: [11, 13, 15, 23, 27],
+    checkVisibility(lm) {
+      const leftOK = [11, 13, 15, 23, 27].every((i) => landmarkVisible(lm, i));
+      const rightOK = [12, 14, 16, 24, 28].every((i) => landmarkVisible(lm, i));
+      return leftOK || rightOK;
+    },
+    state: { phase: "neutral", best: null },
+    stats: { repCount: 0, successCount: 0, scores: [], history: [], bestMetric: null, bestScoreSoFar: null },
+    ENTER_DOWN: 140,
+    EXIT_UP: 155,
+    TARGET_ELBOW: 100,
+    process(lm) {
+      const side = pickSide(lm);
+      const elbowAngle = angleBetween(lm[side.shoulder], lm[side.elbow], lm[side.wrist]);
+      const bodyLineAngle = angleBetween(lm[side.shoulder], lm[side.hip], lm[side.ankle]);
+      const shoulder = lm[side.shoulder];
+      const hip = lm[side.hip];
+      const dx = Math.abs(shoulder.x - hip.x);
+      const dy = Math.abs(shoulder.y - hip.y);
+      const torsoTilt = (Math.atan2(dy, dx) * 180) / Math.PI;
+
+      const inPlankPosition = torsoTilt < PUSHUP_MAX_TILT && bodyLineAngle > PUSHUP_MIN_BODYLINE;
+
+      if (!inPlankPosition) {
+        setBanner("請維持棒式姿勢（身體打直、與地面平行）才會開始計算", "neutral");
+        this.state.phase = "neutral";
+        this.state.best = null;
+        return;
+      }
+
+      if (this.state.phase === "neutral" && elbowAngle < this.ENTER_DOWN) {
+        this.state.phase = "active";
+        this.state.best = elbowAngle;
+        this.state.startTime = performance.now();
+        speak("手肘彎曲，慢慢下降");
+        setBanner("下降中…手肘再彎多一點", "warn");
+      } else if (this.state.phase === "active") {
+        this.state.best = Math.min(this.state.best, elbowAngle);
+        if (elbowAngle >= this.EXIT_UP) {
+          const elapsed = performance.now() - this.state.startTime;
+          const depthScore = scoreReachTarget(this.state.best, this.TARGET_ELBOW, 0.8, 8, true);
+          const lineScore = scoreFromAngleDiff(bodyLineAngle, 180, 0.6, 15);
+          const metricValue = 180 - this.state.best;
+          finishRep(this, { score: Math.round(depthScore * 0.7 + lineScore * 0.3), elapsedMs: elapsed, metricValue });
+          this.state.phase = "neutral"; this.state.best = null;
+        } else {
+          setBanner("下降中…手肘角度 " + Math.round(elbowAngle) + "°", "warn");
+        }
+      } else {
+        setBanner("維持棒式姿勢，準備開始伏地挺身", "neutral");
+      }
+    },
+  },
+};
+
+// 手臂類動作（過肩舉高、側平舉）共用同一套邏輯，只差在目標角度與計分方式
+function makeArmExercise({ key, label, facingHint, targetElevation, scoreStyle, enterThreshold, exitThreshold, targetElbow, metricLabel }) {
+  return {
+    label, facingHint, metricLabel,
+    showAsymmetry: true,
+    requiredPoints: [11, 13, 15, 12, 14, 16],
+    state: { phase: "neutral", bestScore: 0, bestElevation: null, bestAsymmetry: null, startTime: null },
+    stats: { repCount: 0, successCount: 0, scores: [], history: [], bestMetric: null, bestScoreSoFar: null },
+    process(lm) {
+      const leftElbow = angleBetween(lm[11], lm[13], lm[15]);
+      const rightElbow = angleBetween(lm[12], lm[14], lm[16]);
+      const elbowAngle = (leftElbow + rightElbow) / 2;
+      const leftElev = angleFromVertical(lm[11], lm[15]);
+      const rightElev = angleFromVertical(lm[12], lm[16]);
+      const elevAvg = (leftElev + rightElev) / 2;
+
+      if (this.state.phase === "neutral" && elevAvg > enterThreshold) {
+        this.state.phase = "active";
+        this.state.bestScore = -1;
+        this.state.bestElevation = null;
+        this.state.bestAsymmetry = null;
+        this.state.startTime = performance.now();
+        speak(key === "lateralRaise" ? "手往旁邊舉高，舉到跟肩膀一樣高" : "手舉高，手臂打直");
+        setBanner("動作中…", "warn");
+      } else if (this.state.phase === "active") {
+        const elevScore = scoreStyle === "reachHigh"
+          ? scoreReachTarget(elevAvg, targetElevation, 1.0, 8, false)
+          : scoreFromAngleDiff(elevAvg, targetElevation, 1.0, 10);
+        const straightScore = scoreFromAngleDiff(elbowAngle, targetElbow, 0.8, 10);
+        const combined = elevScore * 0.6 + straightScore * 0.4;
+        if (combined > this.state.bestScore) {
+          this.state.bestScore = combined;
+          this.state.bestElevation = elevAvg;
+          this.state.bestAsymmetry = Math.abs(leftElev - rightElev);
+        }
+        if (elevAvg < exitThreshold) {
+          const elapsed = performance.now() - this.state.startTime;
+          finishRep(this, {
+            score: Math.round(this.state.bestScore),
+            elapsedMs: elapsed,
+            metricValue: this.state.bestElevation,
+            asymmetry: this.state.bestAsymmetry,
+          });
+          this.state.phase = "neutral";
+        } else {
+          setBanner("動作中… 角度約 " + Math.round(elevAvg) + "°", "warn");
+        }
+      } else {
+        setBanner("請自然站立，準備開始" + label, "neutral");
+      }
+    },
+  };
+}
+
+exercises.armRaise = makeArmExercise({
+  key: "armRaise",
+  label: "雙手舉高（過肩）",
+  facingHint: "📍 建議「正面」面對鏡頭站好，雙手打開的範圍才不會超出畫面。",
+  targetElevation: 170,
+  scoreStyle: "reachHigh",
+  enterThreshold: 40,
+  exitThreshold: 25,
+  targetElbow: 160,
+  metricLabel: "手臂上舉角度",
+});
+
+exercises.lateralRaise = makeArmExercise({
+  key: "lateralRaise",
+  label: "側平舉（手臂側舉）",
+  facingHint: "📍 建議「正面」面對鏡頭站好，手往兩側平舉，讓鏡頭看到雙手完整範圍。",
+  targetElevation: 90,
+  scoreStyle: "closest",
+  enterThreshold: 35,
+  exitThreshold: 20,
+  targetElbow: 165,
+  metricLabel: "手臂側舉角度",
+});
+
+function setBanner(text, kind) {
+  feedbackBanner.textContent = text;
+  const colors = {
+    warn: "rgba(251,191,36,0.5)",
+    neutral: "rgba(0,0,0,0.55)",
+    good: "rgba(74,222,128,0.55)",
+    bad: "rgba(248,113,113,0.55)",
+  };
+  feedbackBanner.style.background = colors[kind] || colors.neutral;
+}
+
+function currentExercise() { return exercises[exerciseSelect.value]; }
+
+function finishRep(ex, { score: rawScore, elapsedMs, metricValue, asymmetry } = {}) {
+  let score = rawScore;
+  let tooFast = false;
+  if (typeof elapsedMs === "number" && elapsedMs < MIN_REP_MS) {
+    tooFast = true;
+    score = Math.min(score, 70);
+  }
+
+  ex.stats.repCount += 1;
+  const pass = score >= SUCCESS_THRESHOLD;
+  if (pass) ex.stats.successCount += 1;
+  ex.stats.scores.push(score);
+  ex.stats.history.unshift({ n: ex.stats.repCount, score, pass, tooFast, metricValue, asymmetry, time: Date.now() });
+
+  if (ex.stats.bestScoreSoFar == null || score > ex.stats.bestScoreSoFar) {
+    ex.stats.bestScoreSoFar = score;
+    ex.stats.bestMetric = metricValue;
+  }
+
+  let msg = (pass ? "✅ 完成！" : "⚠️ 再加油") + "　本次分數：" + score + "%";
+  if (tooFast) msg += "（動作太快了）";
+  setBanner(msg, pass ? "good" : "bad");
+  speak(tooFast ? "動作太快了，請放慢速度" : pass ? "很好，完成一次" : "再加油，繼續");
+
+  updateStatsUI();
+
+  if (ex.plan && !ex.plan.done && !ex.plan.resting) {
+    ex.plan.repsInSet += 1;
+    if (ex.plan.repsInSet >= ex.plan.targetReps) {
+      if (ex.plan.currentSet >= ex.plan.targetSets) {
+        ex.plan.done = true;
+        speak("恭喜，全部訓練完成");
+        setBanner("🎉 全部訓練完成！", "good");
+      } else {
+        ex.plan.resting = true;
+        ex.plan.restEndTime = performance.now() + ex.plan.restSeconds * 1000;
+        speak("第 " + ex.plan.currentSet + " 組完成，休息一下");
+        openRestOverlay(ex);
+      }
+    }
+    updatePlanUI();
+  }
+}
+
+function updateStatsUI() {
+  const ex = currentExercise();
+  const s = ex.stats;
+  statsTagEl.textContent = "（" + ex.label + "）";
+  repCountEl.textContent = s.repCount;
+  successCountEl.textContent = s.successCount;
+  successRateEl.textContent = s.repCount ? Math.round((s.successCount / s.repCount) * 100) + "%" : "—";
+  avgScoreEl.textContent = s.scores.length ? Math.round(s.scores.reduce((a, b) => a + b, 0) / s.scores.length) + "%" : "—";
+
+  historyEl.innerHTML = "";
+  s.history.forEach((row) => {
+    const div = document.createElement("div");
+    div.className = "history-row " + (row.pass ? "ok" : "no");
+    div.innerHTML = "<span>第 " + row.n + " 次" + (row.tooFast ? " ⚡太快" : "") + "</span><span>" + row.score + "%</span>";
+    historyEl.appendChild(div);
+  });
+
+  const lastRow = s.history[0];
+  document.getElementById("lastMetric").textContent = lastRow && lastRow.metricValue != null ? Math.round(lastRow.metricValue) + "°" : "—";
+  document.getElementById("bestMetric").textContent = s.bestMetric != null ? Math.round(s.bestMetric) + "°" : "—";
+  document.getElementById("lastMetricLbl").textContent = "本次" + (ex.metricLabel || "活動度");
+  document.getElementById("bestMetricLbl").textContent = "最佳" + (ex.metricLabel || "活動度");
+
+  const asymRow = document.getElementById("asymmetryRow");
+  if (ex.showAsymmetry && lastRow && lastRow.asymmetry != null) {
+    asymRow.textContent = "左右不對稱：約 " + Math.round(lastRow.asymmetry) + "°（越小越對稱）";
+  } else {
+    asymRow.textContent = "";
+  }
+
+  drawSparkline(s.scores);
+  updatePlanUI();
+}
+
+function updateFacingHint() { facingHintEl.textContent = currentExercise().facingHint; }
+
+exportBtn.addEventListener("click", () => {
+  const ex = currentExercise();
+  const rows = ["次數,分數,是否合格,是否太快,活動度(度),左右不對稱(度),時間"];
+  ex.stats.history.slice().reverse().forEach((r) => {
+    rows.push([
+      r.n,
+      r.score,
+      r.pass ? "是" : "否",
+      r.tooFast ? "是" : "否",
+      r.metricValue != null ? Math.round(r.metricValue) : "",
+      r.asymmetry != null ? Math.round(r.asymmetry) : "",
+      new Date(r.time).toLocaleString("zh-TW"),
+    ].join(","));
+  });
+  const blob = new Blob(["\uFEFF" + rows.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = ex.label + "_紀錄_" + Date.now() + ".csv";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+cloudSaveBtn.addEventListener("click", async () => {
+  const ex = currentExercise();
+  const s = ex.stats;
+
+  if (s.repCount === 0) {
+    cloudStatusEl.textContent = "目前還沒有任何紀錄，請先做幾次動作再儲存。";
+    cloudStatusEl.className = "cloud-status error";
+    return;
+  }
+
+  if (typeof db === "undefined" || !db) {
+    cloudStatusEl.textContent = "資料庫沒有連上，請確認 firebase-init.js 是否有放在同一個資料夾。";
+    cloudStatusEl.className = "cloud-status error";
+    return;
+  }
+
+  cloudSaveBtn.disabled = true;
+  cloudStatusEl.textContent = "儲存中...";
+  cloudStatusEl.className = "cloud-status";
+
+  try {
+    const currentUser = firebase.auth().currentUser;
+    await db.collection("pose_sessions").add({
+      exerciseKey: exerciseSelect.value,
+      exerciseLabel: ex.label,
+      repCount: s.repCount,
+      successCount: s.successCount,
+      successRate: s.repCount ? Math.round((s.successCount / s.repCount) * 100) : 0,
+      avgScore: s.scores.length ? Math.round(s.scores.reduce((a, b) => a + b, 0) / s.scores.length) : null,
+      bestMetric: s.bestMetric != null ? Math.round(s.bestMetric) : null,
+      therapistUid: currentUser ? currentUser.uid : null,
+      therapistEmail: currentUser ? currentUser.email : null,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    cloudStatusEl.textContent = "已儲存到雲端 ✓";
+    cloudStatusEl.className = "cloud-status success";
+  } catch (error) {
+    console.error("儲存訓練紀錄失敗", error);
+    cloudStatusEl.textContent = "儲存失敗：" + (error.message || error);
+    cloudStatusEl.className = "cloud-status error";
+  } finally {
+    cloudSaveBtn.disabled = false;
+  }
+});
+
+// ---------- 鏡頭與模型 ----------
+async function initPoseLandmarker() {
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+  );
+  poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+      delegate: "GPU",
+    },
+    runningMode: "VIDEO",
+    numPoses: 1,
+  });
+}
+
+startBtn.addEventListener("click", async () => {
+  if (!poseLandmarker) {
+    startBtn.disabled = true;
+    startBtn.textContent = "模型載入中…";
+    await initPoseLandmarker();
+    startBtn.disabled = false;
+  }
+  if (!webcamRunning) {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = stream;
+    video.addEventListener("loadeddata", () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      webcamRunning = true;
+      hipHistory = [];
+      personMissingSince = null;
+      startBtn.textContent = "停止鏡頭";
+      predictWebcam();
+    }, { once: true });
+  } else {
+    webcamRunning = false;
+    video.srcObject.getTracks().forEach((t) => t.stop());
+    startBtn.textContent = "開始鏡頭";
+    setBanner("已停止", "neutral");
+  }
+});
+
+resetBtn.addEventListener("click", () => {
+  const ex = currentExercise();
+  const key = exerciseSelect.value;
+  ex.stats = { repCount: 0, successCount: 0, scores: [], history: [], bestMetric: null, bestScoreSoFar: null };
+  if (key === "armRaise" || key === "lateralRaise") {
+    ex.state = { phase: "neutral", bestScore: 0, bestElevation: null, bestAsymmetry: null, startTime: null };
+  } else if (key === "pushUp") {
+    ex.state = { phase: "neutral", best: null };
+  } else {
+    ex.state = { phase: "neutral", best: null, standingHipY: null };
+  }
+  ex.plan = null;
+  closeRestOverlay();
+  updateStatsUI();
+});
+
+exerciseSelect.addEventListener("change", () => {
+  updateFacingHint();
+  updateStatsUI();
+  setBanner("已切換動作，請重新開始", "neutral");
+});
+
+async function predictWebcam() {
+  if (!webcamRunning) return;
+  const now = performance.now();
+  if (video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const result = poseLandmarker.detectForVideo(video, now);
+
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (result.landmarks && result.landmarks.length > 0) {
+      personMissingSince = null;
+      const lm = result.landmarks[0];
+      drawingUtils.drawLandmarks(lm, { radius: 3, color: "#4fd1c5" });
+      drawingUtils.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#93a0b4", lineWidth: 2 });
+
+      if (landmarkVisible(lm, 23) && landmarkVisible(lm, 24)) {
+        const hipY = (lm[23].y + lm[24].y) / 2;
+        hipHistory.push({ t: now, y: hipY });
+        hipHistory = hipHistory.filter((p) => now - p.t <= FALL_WINDOW_MS);
+        if (hipHistory.length >= 2) {
+          const drop = hipY - hipHistory[0].y;
+          if (drop > FALL_DROP_THRESHOLD) {
+            triggerSafetyAlert("偵測到身體突然大幅度往下移動，請確認您的安全，是否需要協助？");
+          }
+        }
+      }
+
+      const ex = currentExercise();
+      const visible = ex.checkVisibility ? ex.checkVisibility(lm) : ex.requiredPoints.every((i) => landmarkVisible(lm, i));
+      if (ex.plan && (ex.plan.resting || ex.plan.done)) {
+        // 休息中或已完成整個訓練計畫，暫停計次
+      } else if (visible) {
+        ex.process(lm);
+      } else {
+        setBanner("偵測不到完整身體，請調整站位或距離", "neutral");
+      }
+    } else {
+      if (personMissingSince === null) {
+        personMissingSince = now;
+      } else if (now - personMissingSince > DISAPPEAR_TIMEOUT_MS) {
+        triggerSafetyAlert("已經好幾秒偵測不到您，請確認您的安全，是否需要協助？");
+      }
+      setBanner("偵測不到人，請站到鏡頭前", "neutral");
+    }
+    ctx.restore();
+  }
+  requestAnimationFrame(predictWebcam);
+}
+
+updateFacingHint();
+updateStatsUI();
+</script>
+</body>
+</html>
